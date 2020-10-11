@@ -1,49 +1,72 @@
 package com.example.flo
 
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
+import androidx.appcompat.app.AppCompatActivity
+import com.google.gson.Gson
 import kotlinx.android.synthetic.main.activity_main.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
+import java.io.IOException
 import java.net.URL
 import kotlin.concurrent.thread
-import retrofit2.http.GET //Retrofit2 Library Used.  https://square.github.io/retrofit/
-
+import okhttp3.*
+/*
+Used Library
+OKHttp 4.9 : https://square.github.io/okhttp/
+ */
 
 class MainActivity : AppCompatActivity() {
+    private var statePlaying = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         imageButton2.setOnClickListener(){
-            thread(start=true){
-                val urlJson = URL("https://grepp-programmers-challenges.s3.ap-northeast-2.amazonaws.com/2020-flo/song.json")
-                val urlConnection = urlJson.openConnection() as HttpURLConnection
-                urlConnection.requestMethod = "GET"
 
-                if(urlConnection.responseCode == HttpURLConnection.HTTP_OK){
-                    val streamReader = InputStreamReader(urlConnection.inputStream)
-                    val buffered = BufferedReader(streamReader)
+            when(statePlaying){
+                false -> {
+                    statePlaying = true
+                    imageButton2.setBackgroundResource(R.drawable.ic_baseline_pause_24)
+                    thread(start = true) {
+                        val urlJson =
+                            URL("https://grepp-programmers-challenges.s3.ap-northeast-2.amazonaws.com/2020-flo/song.json")
+                        val client = OkHttpClient()
+                        val request = Request.Builder().url(urlJson).build()
 
-                    val content = StringBuilder()
-                    while(true){
-                        val line = buffered.readLine() ?:break
-                        content.append(line)
-                    }
 
-                    buffered.close()
-                    urlConnection.disconnect()
+                        client.newCall(request).enqueue(object : Callback {
+                            override fun onFailure(call: Call, e: IOException) {
+                                Log.e("Error", "Failure!")
+                            }
 
-                    runOnUiThread{
-                        Log.d("jsonstring", content.toString())
+                            override fun onResponse(call: Call, response: Response) {
+                                var strJson = response?.body!!.string()
+                                val gson = Gson()
+                                val FLOData: FLOJson = gson.fromJson(strJson, FLOJson::class.java)
+                                Log.d("jsonstring", strJson)
+
+                                runOnUiThread{
+                                    if (FLOData != null) {
+                                        textTitle.text = FLOData.title
+                                        textArtist.text = FLOData.singer
+                                        textAlbum.text = FLOData.album
+                                        textDuration.text = "${(FLOData.duration / 60)}:${(FLOData.duration % 60)}"
+                                    }
+                                }
+                            }
+                        })
                     }
                 }
+                true -> {
+                    statePlaying = false
+                    imageButton2.setBackgroundResource(R.drawable.ic_baseline_play_arrow_24)
+                }
+
             }
         }
     }
 }
+
 
 /*
 {
