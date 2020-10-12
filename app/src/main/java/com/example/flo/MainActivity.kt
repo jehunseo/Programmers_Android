@@ -1,71 +1,174 @@
 package com.example.flo
 
+import android.content.Intent
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
 import android.util.Log
+import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
+import com.bumptech.glide.Glide
 import com.google.gson.Gson
 import kotlinx.android.synthetic.main.activity_main.*
-import java.io.IOException
-import java.net.URL
-import kotlin.concurrent.thread
 import okhttp3.*
+import java.io.IOException
+import kotlin.concurrent.thread
+
 /*
 Used Library
 OKHttp 4.9 : https://square.github.io/okhttp/
+Glide 4.11.0 : https://github.com/bumptech/glide
+Gson 2.9.0
  */
 
 class MainActivity : AppCompatActivity() {
-    private var statePlaying = false
+    val client = OkHttpClient()
+    val request = Request.Builder().url(FLOdata.urlJson).build()
+    val handler = Handler()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        imageButton2.setOnClickListener(){
-
-            when(statePlaying){
-                false -> {
-                    statePlaying = true
-                    imageButton2.setBackgroundResource(R.drawable.ic_baseline_pause_24)
+        //get mediaplayer running time and Implement on seekBar
+        val runnable = object : Runnable {
+            override fun run() {
+                val intent = Intent(this@MainActivity, FullLyricsActivity::class.java)
+                if (FLOdata.mediaPlayer != null) {
                     thread(start = true) {
-                        val urlJson =
-                            URL("https://grepp-programmers-challenges.s3.ap-northeast-2.amazonaws.com/2020-flo/song.json")
-                        val client = OkHttpClient()
-                        val request = Request.Builder().url(urlJson).build()
-
-
-                        client.newCall(request).enqueue(object : Callback {
-                            override fun onFailure(call: Call, e: IOException) {
-                                Log.e("Error", "Failure!")
+                        FLOdata.timeindex = -1
+                        val runningtime = FLOdata.mediaPlayer?.currentPosition
+                        if (runningtime != null) {
+                            if (runningtime >= FLOdata.duration * 1000) {
+                                FLOdata.statePlaying = false
+                                runOnUiThread { imageButton2.setBackgroundResource(R.drawable.ic_baseline_play_arrow_24) }
+                                FLOdata.mediaPlayer?.release()
                             }
-
-                            override fun onResponse(call: Call, response: Response) {
-                                var strJson = response?.body!!.string()
-                                val gson = Gson()
-                                val FLOData: FLOJson = gson.fromJson(strJson, FLOJson::class.java)
-                                Log.d("jsonstring", strJson)
-
-                                runOnUiThread{
-                                    if (FLOData != null) {
-                                        textTitle.text = FLOData.title
-                                        textArtist.text = FLOData.singer
-                                        textAlbum.text = FLOData.album
-                                        textDuration.text = "${(FLOData.duration / 60)}:${(FLOData.duration % 60)}"
-                                    }
+                            for (i in 0..(FLOdata.lyrics.size - 2)) {
+                                if (runningtime > FLOdata.timeline[i] && runningtime < FLOdata.timeline[i + 1]) {
+                                    FLOdata.timeindex = i
+                                    runOnUiThread { textLyrics.text = FLOdata.lyrics[i] }
+                                    break
                                 }
                             }
-                        })
+                            if (runningtime > FLOdata.timeline[FLOdata.lyrics.size-1]) {
+                                FLOdata.timeindex = FLOdata.lyrics.size - 1
+                                runOnUiThread { textLyrics.text = FLOdata.lyrics[FLOdata.lyrics.size-1] }
+                            }
+                            seekBar.progress = (runningtime / 1000)
+                            intent.putExtra("progress", seekBar.progress)
+                        }
+
                     }
                 }
+                handler.postDelayed(this, 100)
+            }
+        }
+
+        //take Json Data and Implement on UI
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("Error", "Failure!")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val strJson = response?.body?.string()
+                val gson = Gson()
+                val FLOData: FLOJson = gson.fromJson(strJson, FLOJson::class.java)
+                val image = Glide.with(this@MainActivity).load(FLOData.image)
+
+                FLOdata.duration = FLOData.duration
+                FLOdata.fileURL = FLOData.file
+
+                parseLyrics(FLOData.lyrics)
+
+                runOnUiThread {
+                    if (FLOData != null) {
+                        textTitle.text = FLOData.title
+                        textArtist.text = FLOData.singer
+                        textAlbum.text = FLOData.album
+                        textDuration.text =
+                            "${(FLOdata.duration / 60)}:${(FLOdata.duration % 60)}"
+                        image.into(imageAlbumArt)
+                        seekBar.max = FLOdata.duration
+                    }
+                }
+            }
+        }) //parse all data
+
+        //make audio pause / play
+        imageButton2.setOnClickListener() {
+            when (FLOdata.statePlaying) {
+                false -> {
+                    handler.post(runnable)
+                    FLOdata.statePlaying = true
+                    imageButton2.setBackgroundResource(R.drawable.ic_baseline_pause_24)
+                    thread(start = true) {
+                        FLOdata.mediaPlayer = MediaPlayer()?.apply {
+                            setAudioStreamType(AudioManager.STREAM_MUSIC)
+                            setDataSource(FLOdata.fileURL)
+                            prepare() // might take long! (for buffering, etc)
+                        }
+                        FLOdata.mediaPlayer?.seekTo(FLOdata.pausePosition)
+                        FLOdata.mediaPlayer?.start()
+                    }
+
+
+                }
                 true -> {
-                    statePlaying = false
+                    handler.removeCallbacks(runnable)
+                    FLOdata.statePlaying = false
                     imageButton2.setBackgroundResource(R.drawable.ic_baseline_play_arrow_24)
+                    FLOdata.mediaPlayer?.pause()
+                    FLOdata.pausePosition = seekBar.progress * 1000
                 }
 
             }
         }
+
+        //change playing time with seekBar
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var tempSeekbar = FLOdata.pausePosition
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                seekBar!!.progress = progress
+                tempSeekbar = progress
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                handler.removeCallbacks(runnable)
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                seekBar!!.progress = tempSeekbar
+                FLOdata.pausePosition = tempSeekbar * 1000
+                if (tempSeekbar > seekBar.max) FLOdata.pausePosition = seekBar.max
+                FLOdata.mediaPlayer?.seekTo(FLOdata.pausePosition)
+                handler.post(runnable)
+            }
+
+        })
+
+        //if click lyrics text, move to FullLyricsActivity
+        textLyrics.setOnClickListener() {
+            val intent = Intent(this@MainActivity, FullLyricsActivity::class.java)
+            startActivity(intent)
+        }
+        //parse Lyrics to time and lyrics line
+    }
+    fun parseLyrics(string: String): Unit {
+        //[00:16:200]we wish you a merry christmas\n[00:18:300]we wish you a merry christmas\n
+        for (s in string.split('\n')) {
+            FLOdata.timeline.add(
+                s.substring(1..2).toInt() * 60000 + s.substring(4..5)
+                    .toInt() * 1000 + s.substring(7..7) .toInt() * 100
+            )
+            FLOdata.lyrics.add(s.substring(11, s.length))
+        }
     }
 }
+
+
 
 
 /*
